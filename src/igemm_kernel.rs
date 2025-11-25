@@ -30,6 +30,9 @@ type T = i32;
 
 /// Detect which implementation to use and select it using the selector's
 /// .select(Kernel) method.
+///
+/// This function is called one or more times during a whole program's
+/// execution, it may be called for each gemm kernel invocation or fewer times.
 #[inline]
 pub(crate) fn detect<G>(selector: G) where G: GemmSelect<T> {
     #[cfg(any(target_arch="x86", target_arch="x86_64"))]
@@ -190,6 +193,17 @@ unsafe fn kernel_target_avx2(k: usize, alpha: T, a: *const T, b: *const T,
     let mut b = b;
 
     // Compute A B
+    //
+    // We compute ab[i][j] += a[i] * b[j]
+    //
+    // ab[i] holds the row i of the accumulator block (size NR)
+    //
+    // In each step of k:
+    // 1. Load b as a vector (size NR)
+    // 2. For each row i in 0..MR:
+    //    Broadcast a[i] to a vector
+    //    Multiply broadcasted a[i] with b vector
+    //    Accumulate into ab[i]
     unroll_by!(4 => k, {
         let bv = _mm256_loadu_si256(b as *const _);
         
@@ -213,28 +227,47 @@ unsafe fn kernel_target_avx2(k: usize, alpha: T, a: *const T, b: *const T,
         ($i:expr, $j:expr) => (c.offset(rsc * $i as isize + csc * $j as isize));
     }
 
-    for i in 0..MR {
-        ab[i] = _mm256_mullo_epi32(alphav, ab[i]);
-        
+    if alpha != 1 {
+        for i in 0..MR {
+            ab[i] = _mm256_mullo_epi32(alphav, ab[i]);
+        }
+    }
+
+
+    if beta != 0 {
         if csc == 1 {
-            let c_ptr = c![i, 0];
-            if beta != 0 {
+            for i in 0..MR {
+                let c_ptr = c![i, 0];
                 let cv = _mm256_loadu_si256(c_ptr as *const _);
                 let cv = _mm256_mullo_epi32(cv, betav);
                 ab[i] = _mm256_add_epi32(ab[i], cv);
             }
-            _mm256_storeu_si256(c_ptr as *mut _, ab[i]);
         } else {
-            let mut buf = [0i32; NR];
-            _mm256_storeu_si256(buf.as_mut_ptr() as *mut _, ab[i]);
-            for j in 0..NR {
-                let c_elt = c![i, j];
-                if beta != 0 {
-                    *c_elt = *c_elt * beta + buf[j];
-                } else {
-                    *c_elt = buf[j];
-                }
+            for i in 0..MR {
+                let cv = _mm256_setr_epi32(
+                    *c![i, 0], *c![i, 1], *c![i, 2], *c![i, 3],
+                    *c![i, 4], *c![i, 5], *c![i, 6], *c![i, 7]
+                );
+                let cv = _mm256_mullo_epi32(cv, betav);
+                ab[i] = _mm256_add_epi32(ab[i], cv);
             }
+        }
+    }
+
+    if csc == 1 {
+        for i in 0..MR {
+            _mm256_storeu_si256(c![i, 0] as *mut _, ab[i]);
+        }
+    } else {
+        for i in 0..MR {
+            *c![i, 0] = _mm256_extract_epi32(ab[i], 0);
+            *c![i, 1] = _mm256_extract_epi32(ab[i], 1);
+            *c![i, 2] = _mm256_extract_epi32(ab[i], 2);
+            *c![i, 3] = _mm256_extract_epi32(ab[i], 3);
+            *c![i, 4] = _mm256_extract_epi32(ab[i], 4);
+            *c![i, 5] = _mm256_extract_epi32(ab[i], 5);
+            *c![i, 6] = _mm256_extract_epi32(ab[i], 6);
+            *c![i, 7] = _mm256_extract_epi32(ab[i], 7);
         }
     }
 }
@@ -251,6 +284,18 @@ unsafe fn kernel_target_sse41(k: usize, alpha: T, a: *const T, b: *const T,
     let mut a = a;
     let mut b = b;
 
+    // Compute A B
+    //
+    // We compute ab[i][j] += a[i] * b[j]
+    //
+    // ab[i] holds the row i of the accumulator block (size NR)
+    //
+    // In each step of k:
+    // 1. Load b as a vector (size NR)
+    // 2. For each row i in 0..MR:
+    //    Broadcast a[i] to a vector
+    //    Multiply broadcasted a[i] with b vector
+    //    Accumulate into ab[i]
     unroll_by!(4 => k, {
         let bv = _mm_loadu_si128(b as *const _);
         
@@ -270,28 +315,41 @@ unsafe fn kernel_target_sse41(k: usize, alpha: T, a: *const T, b: *const T,
         ($i:expr, $j:expr) => (c.offset(rsc * $i as isize + csc * $j as isize));
     }
 
-    for i in 0..MR {
-        ab[i] = _mm_mullo_epi32(alphav, ab[i]);
-        
+    if alpha != 1 {
+        for i in 0..MR {
+            ab[i] = _mm_mullo_epi32(alphav, ab[i]);
+        }
+    }
+
+    if beta != 0 {
         if csc == 1 {
-            let c_ptr = c![i, 0];
-            if beta != 0 {
+            for i in 0..MR {
+                let c_ptr = c![i, 0];
                 let cv = _mm_loadu_si128(c_ptr as *const _);
                 let cv = _mm_mullo_epi32(cv, betav);
                 ab[i] = _mm_add_epi32(ab[i], cv);
             }
-            _mm_storeu_si128(c_ptr as *mut _, ab[i]);
         } else {
-            let mut buf = [0i32; NR];
-            _mm_storeu_si128(buf.as_mut_ptr() as *mut _, ab[i]);
-            for j in 0..NR {
-                let c_elt = c![i, j];
-                if beta != 0 {
-                    *c_elt = *c_elt * beta + buf[j];
-                } else {
-                    *c_elt = buf[j];
-                }
+            for i in 0..MR {
+                let cv = _mm_setr_epi32(
+                    *c![i, 0], *c![i, 1], *c![i, 2], *c![i, 3]
+                );
+                let cv = _mm_mullo_epi32(cv, betav);
+                ab[i] = _mm_add_epi32(ab[i], cv);
             }
+        }
+    }
+
+    if csc == 1 {
+        for i in 0..MR {
+            _mm_storeu_si128(c![i, 0] as *mut _, ab[i]);
+        }
+    } else {
+        for i in 0..MR {
+            *c![i, 0] = _mm_extract_epi32(ab[i], 0);
+            *c![i, 1] = _mm_extract_epi32(ab[i], 1);
+            *c![i, 2] = _mm_extract_epi32(ab[i], 2);
+            *c![i, 3] = _mm_extract_epi32(ab[i], 3);
         }
     }
 }
@@ -309,6 +367,17 @@ unsafe fn kernel_target_neon(k: usize, alpha: T, a: *const T, b: *const T,
     let mut a = a;
     let mut b = b;
 
+    // Compute A B
+    //
+    // We compute ab[i][j] += a[i] * b[j]
+    //
+    // ab[i] holds the row i of the accumulator block (size NR)
+    //
+    // In each step of k:
+    // 1. Load b as a vector (size NR)
+    // 2. For each row i in 0..MR:
+    //    Load a[i] (scalar)
+    //    Multiply-accumulate a[i] * b vector into ab[i]
     unroll_by!(4 => k, {
         let bv = vld1q_s32(b);
         let av = vld1q_s32(a);
@@ -326,27 +395,41 @@ unsafe fn kernel_target_neon(k: usize, alpha: T, a: *const T, b: *const T,
         ($i:expr, $j:expr) => (c.offset(rsc * $i as isize + csc * $j as isize));
     }
 
-    for i in 0..MR {
-        ab[i] = vmulq_n_s32(ab[i], alpha);
-        
+    if alpha != 1 {
+        for i in 0..MR {
+            ab[i] = vmulq_n_s32(ab[i], alpha);
+        }
+    }
+
+    if beta != 0 {
         if csc == 1 {
-            let c_ptr = c![i, 0];
-            if beta != 0 {
+            for i in 0..MR {
+                let c_ptr = c![i, 0];
                 let cv = vld1q_s32(c_ptr);
                 ab[i] = vmlaq_n_s32(ab[i], cv, beta);
             }
-            vst1q_s32(c_ptr, ab[i]);
         } else {
-            let mut buf = [0i32; NR];
-            vst1q_s32(buf.as_mut_ptr(), ab[i]);
-            for j in 0..NR {
-                let c_elt = c![i, j];
-                if beta != 0 {
-                    *c_elt = *c_elt * beta + buf[j];
-                } else {
-                    *c_elt = buf[j];
-                }
+            for i in 0..MR {
+                let mut cv = vdupq_n_s32(0);
+                cv = vld1q_lane_s32(c![i, 0], cv, 0);
+                cv = vld1q_lane_s32(c![i, 1], cv, 1);
+                cv = vld1q_lane_s32(c![i, 2], cv, 2);
+                cv = vld1q_lane_s32(c![i, 3], cv, 3);
+                ab[i] = vmlaq_n_s32(ab[i], cv, beta);
             }
+        }
+    }
+
+    if csc == 1 {
+        for i in 0..MR {
+            vst1q_s32(c![i, 0], ab[i]);
+        }
+    } else {
+        for i in 0..MR {
+            vst1q_lane_s32(c![i, 0], ab[i], 0);
+            vst1q_lane_s32(c![i, 1], ab[i], 1);
+            vst1q_lane_s32(c![i, 2], ab[i], 2);
+            vst1q_lane_s32(c![i, 3], ab[i], 3);
         }
     }
 }
