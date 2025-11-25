@@ -284,7 +284,7 @@ fn ensure_kernel_params<K>()
 // no inline is best for the default case, where we support many K per
 // gemm entry point. FIXME: make this conditional on feature detection
 #[inline(never)]
-unsafe fn gemm_loop<K>(
+pub(crate) unsafe fn gemm_loop<K>(
     m: usize, k: usize, n: usize,
     alpha: K::Elem,
     a: *const K::Elem, rsa: isize, csa: isize,
