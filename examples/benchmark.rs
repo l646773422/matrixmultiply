@@ -124,7 +124,7 @@ fn run_main(args: impl IntoIterator<Item=String>) -> Result<(), String> {
         Err(e) => {
             eprintln!("Usage: <command> [--type <type>] [--layout <layout>] [--csv]  m-size k-size n-size");
             eprintln!();
-            eprintln!("Where <type> is one of: f32, f64, c32, c64");
+            eprintln!("Where <type> is one of: f32, f64, i32, c32, c64");
             eprintln!("Where <layout> is 3 letters from c, f like: ccc fcc fff");
             eprintln!();
             eprintln!("Example: <command> --type f64 --layout fcf 1000 1000 1000");
@@ -138,6 +138,7 @@ fn run_main(args: impl IntoIterator<Item=String>) -> Result<(), String> {
     match opts.use_type {
         UseType::F32 => test_matrix::<f32>(opts.m, opts.k, opts.n, opts.layout, opts.use_csv, opts.use_type, &opts.extra_column),
         UseType::F64 => test_matrix::<f64>(opts.m, opts.k, opts.n, opts.layout, opts.use_csv, opts.use_type, &opts.extra_column),
+        UseType::I32 => test_matrix::<i32>(opts.m, opts.k, opts.n, opts.layout, opts.use_csv, opts.use_type, &opts.extra_column),
         #[cfg(feature="cgemm")]
         UseType::C32 => test_matrix::<c32>(opts.m, opts.k, opts.n, opts.layout, opts.use_csv, opts.use_type, &opts.extra_column),
         #[cfg(feature="cgemm")]
@@ -152,6 +153,7 @@ fn run_main(args: impl IntoIterator<Item=String>) -> Result<(), String> {
 enum UseType {
     F32,
     F64,
+    I32,
     C32,
     C64,
 }
@@ -162,6 +164,7 @@ impl UseType {
         match self {
             F32 => "f32",
             F64 => "f64",
+            I32 => "i32",
             C32 => "c32",
             C64 => "c64",
         }
@@ -169,7 +172,7 @@ impl UseType {
     fn flop_factor(self) -> f64 {
         match self {
             // estimate one multiply and one addition
-            UseType::F32 | UseType::F64 => 2.,
+            UseType::F32 | UseType::F64 | UseType::I32 => 2.,
             // (P + Qi)(R + Si) = ..
             // estimate 8 flop (4 float multiplies and 4 additions).
             UseType::C32 | UseType::C64 => 8.,
@@ -205,6 +208,7 @@ fn parse_args(args: impl IntoIterator<Item=String>) -> Result<Options, String> {
     opts.use_type = match parse.get_string("type") {
         Some("f32") => UseType::F32,
         Some("f64") => UseType::F64,
+        Some("i32") => UseType::I32,
         Some("c32") => UseType::C32,
         Some("c64") => UseType::C64,
         Some(_otherwise) => return Err("Unknown type".to_string()),

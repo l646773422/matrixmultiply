@@ -9,7 +9,7 @@ extern crate core;
 extern crate itertools;
 extern crate matrixmultiply;
 
-use matrixmultiply::{sgemm, dgemm};
+use matrixmultiply::{sgemm, dgemm, igemm};
 
 use itertools::Itertools;
 use itertools::{
@@ -38,6 +38,13 @@ impl Float for f64 {
     fn from(x: i64) -> Self { x as Self }
     fn nan() -> Self { 0./0. }
     fn is_nan(self) -> bool { self.is_nan() }
+}
+
+impl Float for i32 {
+    fn zero() -> Self { 0 }
+    fn from(x: i64) -> Self { x as Self }
+    fn nan() -> Self { core::i32::MIN }
+    fn is_nan(self) -> bool { self == core::i32::MIN }
 }
 
 
@@ -87,9 +94,28 @@ impl Gemm for f64 {
     }
 }
 
+impl Gemm for i32 {
+    unsafe fn gemm(
+        m: usize, k: usize, n: usize,
+        alpha: Self,
+        a: *const Self, rsa: isize, csa: isize,
+        b: *const Self, rsb: isize, csb: isize,
+        beta: Self,
+        c: *mut Self, rsc: isize, csc: isize) {
+        igemm(
+            m, k, n,
+            alpha,
+            a, rsa, csa,
+            b, rsb, csb,
+            beta,
+            c, rsc, csc)
+    }
+}
+
 fn main() {
     test_gemm_strides::<f32>();
     test_gemm_strides::<f64>();
+    test_gemm_strides::<i32>();
 }
 
 fn test_gemm_strides<F>() where F: Gemm + Float {
@@ -159,10 +185,10 @@ fn test_strides_inner<F>(m: usize, k: usize, n: usize,
     let mut c2 = vec![F::nan(); m * n * mstridec2[0] * mstridec2[1]];
 
     for (i, elt) in a.iter_mut().enumerate() {
-        *elt = F::from(i as i64);
+        *elt = F::from((i % 100) as i64);
     }
     for (i, elt) in b.iter_mut().enumerate() {
-        *elt = F::from(i as i64);
+        *elt = F::from((i % 100) as i64);
     }
 
     let la = layouts[0];
