@@ -121,11 +121,11 @@ impl GemmKernel for KernelSse41 {
 impl GemmKernel for KernelNeon {
     type Elem = T;
 
-    type MRTy = U4;
-    type NRTy = U4;
+    type MRTy = U8;
+    type NRTy = U8;
 
     #[inline(always)]
-    fn align_to() -> usize { 16 }
+    fn align_to() -> usize { 32 }
 
     #[inline(always)]
     fn always_masked() -> bool { false }
@@ -206,7 +206,7 @@ unsafe fn kernel_target_avx2(k: usize, alpha: T, a: *const T, b: *const T,
     //    Accumulate into ab[i]
     unroll_by!(4 => k, {
         let bv = _mm256_loadu_si256(b as *const _);
-        
+
         ab[0] = _mm256_add_epi32(ab[0], _mm256_mullo_epi32(_mm256_set1_epi32(at(a, 0)), bv));
         ab[1] = _mm256_add_epi32(ab[1], _mm256_mullo_epi32(_mm256_set1_epi32(at(a, 1)), bv));
         ab[2] = _mm256_add_epi32(ab[2], _mm256_mullo_epi32(_mm256_set1_epi32(at(a, 2)), bv));
@@ -220,21 +220,19 @@ unsafe fn kernel_target_avx2(k: usize, alpha: T, a: *const T, b: *const T,
         b = b.add(NR);
     });
 
-    let alphav = _mm256_set1_epi32(alpha);
-    let betav = _mm256_set1_epi32(beta);
-
     macro_rules! c {
         ($i:expr, $j:expr) => (c.offset(rsc * $i as isize + csc * $j as isize));
     }
 
     if alpha != 1 {
+        let alphav = _mm256_set1_epi32(alpha);
         for i in 0..MR {
             ab[i] = _mm256_mullo_epi32(alphav, ab[i]);
         }
     }
 
-
     if beta != 0 {
+        let betav = _mm256_set1_epi32(beta);
         if csc == 1 {
             for i in 0..MR {
                 let c_ptr = c![i, 0];
@@ -363,74 +361,128 @@ unsafe fn kernel_target_neon(k: usize, alpha: T, a: *const T, b: *const T,
     const MR: usize = KernelNeon::MR;
     const NR: usize = KernelNeon::NR;
 
-    let mut ab = [vdupq_n_s32(0); MR];
-    let mut a = a;
-    let mut b = b;
+    let (mut a, mut b, rsc, csc) = if rsc == 1 { (b, a, csc, rsc) } else { (a, b, rsc, csc) };
 
-    // Compute A B
-    //
-    // We compute ab[i][j] += a[i] * b[j]
-    //
-    // ab[i] holds the row i of the accumulator block (size NR)
-    //
-    // In each step of k:
-    // 1. Load b as a vector (size NR)
-    // 2. For each row i in 0..MR:
-    //    Load a[i] (scalar)
-    //    Multiply-accumulate a[i] * b vector into ab[i]
-    unroll_by!(4 => k, {
-        let bv = vld1q_s32(b);
-        let av = vld1q_s32(a);
+    // Kernel 8 x 8 (a x b)
+    // Four quadrants of 4 x 4
+    let mut ab11 = [vdupq_n_s32(0); 4];
+    let mut ab12 = [vdupq_n_s32(0); 4];
+    let mut ab21 = [vdupq_n_s32(0); 4];
+    let mut ab22 = [vdupq_n_s32(0); 4];
 
-        ab[0] = vmlaq_n_s32(ab[0], bv, vgetq_lane_s32(av, 0));
-        ab[1] = vmlaq_n_s32(ab[1], bv, vgetq_lane_s32(av, 1));
-        ab[2] = vmlaq_n_s32(ab[2], bv, vgetq_lane_s32(av, 2));
-        ab[3] = vmlaq_n_s32(ab[3], bv, vgetq_lane_s32(av, 3));
+    // Compute
+    // ab_ij = a_i * b_j for all i, j
+    macro_rules! ab_ij_equals_ai_bj {
+        ($dest:ident, $av:expr, $bv:expr) => {
+            $dest[0] = vmlaq_laneq_s32($dest[0], $bv, $av, 0);
+            $dest[1] = vmlaq_laneq_s32($dest[1], $bv, $av, 1);
+            $dest[2] = vmlaq_laneq_s32($dest[2], $bv, $av, 2);
+            $dest[3] = vmlaq_laneq_s32($dest[3], $bv, $av, 3);
+        }
+    }
+
+    for _ in 0..k {
+        let a1 = vld1q_s32(a);
+        let b1 = vld1q_s32(b);
+        let a2 = vld1q_s32(a.add(4));
+        let b2 = vld1q_s32(b.add(4));
+
+        // compute an outer product ab = a (*) b in four quadrants ab11, ab12, ab21, ab22
+
+        // ab11: [a1 a2 a3 a4] (*) [b1 b2 b3 b4]
+        // ab11: a1b1 a1b2 a1b3 a1b4
+        //       a2b1 a2b2 a2b3 a2b4
+        //       a3b1 a3b2 a3b3 a3b4
+        //       a4b1 a4b2 a4b3 a4b4
+        //  etc
+        ab_ij_equals_ai_bj!(ab11, a1, b1);
+        ab_ij_equals_ai_bj!(ab12, a1, b2);
+        ab_ij_equals_ai_bj!(ab21, a2, b1);
+        ab_ij_equals_ai_bj!(ab22, a2, b2);
 
         a = a.add(MR);
         b = b.add(NR);
-    });
+    }
 
     macro_rules! c {
         ($i:expr, $j:expr) => (c.offset(rsc * $i as isize + csc * $j as isize));
     }
 
-    if alpha != 1 {
-        for i in 0..MR {
-            ab[i] = vmulq_n_s32(ab[i], alpha);
-        }
+    // ab *= alpha
+    loop4!(i, ab11[i] = vmulq_n_s32(ab11[i], alpha));
+    loop4!(i, ab12[i] = vmulq_n_s32(ab12[i], alpha));
+    loop4!(i, ab21[i] = vmulq_n_s32(ab21[i], alpha));
+    loop4!(i, ab22[i] = vmulq_n_s32(ab22[i], alpha));
+
+    // load one int32x4_t from four pointers
+    macro_rules! loadq_from_pointers {
+        ($p0:expr, $p1:expr, $p2:expr, $p3:expr) => (
+            {
+                let v = vld1q_dup_s32($p0);
+                let v = vld1q_lane_s32($p1, v, 1);
+                let v = vld1q_lane_s32($p2, v, 2);
+                let v = vld1q_lane_s32($p3, v, 3);
+                v
+            }
+        );
     }
 
     if beta != 0 {
+        // load existing value in C
+        let mut c11 = [vdupq_n_s32(0); 4];
+        let mut c12 = [vdupq_n_s32(0); 4];
+        let mut c21 = [vdupq_n_s32(0); 4];
+        let mut c22 = [vdupq_n_s32(0); 4];
+
         if csc == 1 {
-            for i in 0..MR {
-                let c_ptr = c![i, 0];
-                let cv = vld1q_s32(c_ptr);
-                ab[i] = vmlaq_n_s32(ab[i], cv, beta);
-            }
+            loop4!(i, c11[i] = vld1q_s32(c![i + 0, 0]));
+            loop4!(i, c12[i] = vld1q_s32(c![i + 0, 4]));
+            loop4!(i, c21[i] = vld1q_s32(c![i + 4, 0]));
+            loop4!(i, c22[i] = vld1q_s32(c![i + 4, 4]));
         } else {
-            for i in 0..MR {
-                let mut cv = vdupq_n_s32(0);
-                cv = vld1q_lane_s32(c![i, 0], cv, 0);
-                cv = vld1q_lane_s32(c![i, 1], cv, 1);
-                cv = vld1q_lane_s32(c![i, 2], cv, 2);
-                cv = vld1q_lane_s32(c![i, 3], cv, 3);
-                ab[i] = vmlaq_n_s32(ab[i], cv, beta);
-            }
+            loop4!(i, c11[i] = loadq_from_pointers!(c![i + 0, 0], c![i + 0, 1], c![i + 0, 2], c![i + 0, 3]));
+            loop4!(i, c12[i] = loadq_from_pointers!(c![i + 0, 4], c![i + 0, 5], c![i + 0, 6], c![i + 0, 7]));
+            loop4!(i, c21[i] = loadq_from_pointers!(c![i + 4, 0], c![i + 4, 1], c![i + 4, 2], c![i + 4, 3]));
+            loop4!(i, c22[i] = loadq_from_pointers!(c![i + 4, 4], c![i + 4, 5], c![i + 4, 6], c![i + 4, 7]));
         }
+
+        let betav = vdupq_n_s32(beta);
+
+        // ab += β C
+        loop4!(i, ab11[i] = vmlaq_s32(ab11[i], c11[i], betav));
+        loop4!(i, ab12[i] = vmlaq_s32(ab12[i], c12[i], betav));
+        loop4!(i, ab21[i] = vmlaq_s32(ab21[i], c21[i], betav));
+        loop4!(i, ab22[i] = vmlaq_s32(ab22[i], c22[i], betav));
     }
 
+    // c <- ab
+    // which is in full
+    //   C <- α A B (+ β C)
     if csc == 1 {
-        for i in 0..MR {
-            vst1q_s32(c![i, 0], ab[i]);
-        }
+        loop4!(i, vst1q_s32(c![i + 0, 0], ab11[i]));
+        loop4!(i, vst1q_s32(c![i + 0, 4], ab12[i]));
+        loop4!(i, vst1q_s32(c![i + 4, 0], ab21[i]));
+        loop4!(i, vst1q_s32(c![i + 4, 4], ab22[i]));
     } else {
-        for i in 0..MR {
-            vst1q_lane_s32(c![i, 0], ab[i], 0);
-            vst1q_lane_s32(c![i, 1], ab[i], 1);
-            vst1q_lane_s32(c![i, 2], ab[i], 2);
-            vst1q_lane_s32(c![i, 3], ab[i], 3);
-        }
+        loop4!(i, vst1q_lane_s32(c![i + 0, 0], ab11[i], 0));
+        loop4!(i, vst1q_lane_s32(c![i + 0, 1], ab11[i], 1));
+        loop4!(i, vst1q_lane_s32(c![i + 0, 2], ab11[i], 2));
+        loop4!(i, vst1q_lane_s32(c![i + 0, 3], ab11[i], 3));
+
+        loop4!(i, vst1q_lane_s32(c![i + 0, 4], ab12[i], 0));
+        loop4!(i, vst1q_lane_s32(c![i + 0, 5], ab12[i], 1));
+        loop4!(i, vst1q_lane_s32(c![i + 0, 6], ab12[i], 2));
+        loop4!(i, vst1q_lane_s32(c![i + 0, 7], ab12[i], 3));
+
+        loop4!(i, vst1q_lane_s32(c![i + 4, 0], ab21[i], 0));
+        loop4!(i, vst1q_lane_s32(c![i + 4, 1], ab21[i], 1));
+        loop4!(i, vst1q_lane_s32(c![i + 4, 2], ab21[i], 2));
+        loop4!(i, vst1q_lane_s32(c![i + 4, 3], ab21[i], 3));
+
+        loop4!(i, vst1q_lane_s32(c![i + 4, 4], ab22[i], 0));
+        loop4!(i, vst1q_lane_s32(c![i + 4, 5], ab22[i], 1));
+        loop4!(i, vst1q_lane_s32(c![i + 4, 6], ab22[i], 2));
+        loop4!(i, vst1q_lane_s32(c![i + 4, 7], ab22[i], 3));
     }
 }
 
