@@ -168,9 +168,11 @@ mod aarch64;
 
 mod dgemm_kernel;
 mod sgemm_kernel;
+mod igemm_kernel;
 
 pub use crate::gemm::dgemm;
 pub use crate::gemm::sgemm;
+pub use crate::gemm::igemm;
 
 #[cfg(feature = "cgemm")]
 #[macro_use]

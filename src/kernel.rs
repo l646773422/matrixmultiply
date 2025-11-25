@@ -119,6 +119,15 @@ impl Element for f64 {
     fn mul_assign(&mut self, rhs: Self) { *self *= rhs; }
 }
 
+impl Element for i32 {
+    fn zero() -> Self { 0 }
+    fn one() -> Self { 1 }
+    fn test_value() -> Self { 1 }
+    fn is_zero(&self) -> bool { *self == 0 }
+    fn add_assign(&mut self, rhs: Self) { *self += rhs; }
+    fn mul_assign(&mut self, rhs: Self) { *self *= rhs; }
+}
+
 /// Kernel selector
 pub(crate) trait GemmSelect<T> {
     /// Call `select` with the selected kernel for this configuration

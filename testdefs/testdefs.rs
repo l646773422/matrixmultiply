@@ -1,5 +1,4 @@
-
-use matrixmultiply::{sgemm, dgemm};
+use matrixmultiply::{sgemm, dgemm, igemm};
 #[cfg(feature="cgemm")]
 use matrixmultiply::{cgemm, zgemm, CGemmOption};
 
@@ -49,6 +48,21 @@ impl Float for f64 {
     fn diff(self, rhs: Self) -> Self { self - rhs }
     fn abs_f64(self) -> f64 { self.abs() }
     fn relative_error_scale() -> f64 { 1e-12 }
+    fn mul_add_assign(&mut self, x: Self, y: Self) {
+        *self += x * y;
+    }
+}
+
+impl Float for i32 {
+    fn zero() -> Self { 0 }
+    fn one() -> Self { 1 }
+    fn from(x: i64) -> Self { x as Self }
+    fn nan() -> Self { 0 } // No NaN for integers
+    fn imag(self) -> Self { 0 }
+    fn is_nan(self) -> bool { false }
+    fn diff(self, rhs: Self) -> Self { self - rhs }
+    fn abs_f64(self) -> f64 { self.abs() as f64 }
+    fn relative_error_scale() -> f64 { 0.0 } // Exact arithmetic
     fn mul_add_assign(&mut self, x: Self, y: Self) {
         *self += x * y;
     }
@@ -166,6 +180,24 @@ impl Gemm for f64 {
         beta: Self,
         c: *mut Self, rsc: isize, csc: isize) {
         dgemm(
+            m, k, n,
+            alpha,
+            a, rsa, csa,
+            b, rsb, csb,
+            beta,
+            c, rsc, csc)
+    }
+}
+
+impl Gemm for i32 {
+    unsafe fn gemm(
+        m: usize, k: usize, n: usize,
+        alpha: Self,
+        a: *const Self, rsa: isize, csa: isize,
+        b: *const Self, rsb: isize, csb: isize,
+        beta: Self,
+        c: *mut Self, rsc: isize, csc: isize) {
+        igemm(
             m, k, n,
             alpha,
             a, rsa, csa,

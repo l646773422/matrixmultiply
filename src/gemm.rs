@@ -26,6 +26,7 @@ use crate::kernel::{c32, c64};
 use crate::threading::{get_thread_pool, ThreadPoolCtx, LoopThreadConfig};
 use crate::sgemm_kernel;
 use crate::dgemm_kernel;
+use crate::igemm_kernel;
 #[cfg(feature = "cgemm")]
 use crate::cgemm_kernel;
 #[cfg(feature = "cgemm")]
@@ -89,6 +90,38 @@ pub unsafe fn dgemm(
     c: *mut f64, rsc: isize, csc: isize)
 {
     dgemm_kernel::detect(GemmParameters { m, k, n,
+                alpha,
+                a, rsa, csa,
+                b, rsb, csb,
+                beta,
+                c, rsc, csc})
+}
+
+/// General matrix multiplication (i32)
+///
+/// C ← α A B + β C
+///
+/// + m, k, n: dimensions
+/// + a, b, c: pointer to the first element in the matrix
+/// + A: m by k matrix
+/// + B: k by n matrix
+/// + C: m by n matrix
+/// + rs<em>x</em>: row stride of *x*
+/// + cs<em>x</em>: col stride of *x*
+///
+/// Strides for A and B may be arbitrary. Strides for C must not result in
+/// elements that alias each other, for example they can not be zero.
+///
+/// If β is zero, then C does not need to be initialized.
+pub unsafe fn igemm(
+    m: usize, k: usize, n: usize,
+    alpha: i32,
+    a: *const i32, rsa: isize, csa: isize,
+    b: *const i32, rsb: isize, csb: isize,
+    beta: i32,
+    c: *mut i32, rsc: isize, csc: isize)
+{
+    igemm_kernel::detect(GemmParameters { m, k, n,
                 alpha,
                 a, rsa, csa,
                 b, rsb, csb,
