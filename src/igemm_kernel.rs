@@ -409,10 +409,12 @@ unsafe fn kernel_target_neon(k: usize, alpha: T, a: *const T, b: *const T,
     }
 
     // ab *= alpha
-    loop4!(i, ab11[i] = vmulq_n_s32(ab11[i], alpha));
-    loop4!(i, ab12[i] = vmulq_n_s32(ab12[i], alpha));
-    loop4!(i, ab21[i] = vmulq_n_s32(ab21[i], alpha));
-    loop4!(i, ab22[i] = vmulq_n_s32(ab22[i], alpha));
+    if alpha != 1 {
+        loop4!(i, ab11[i] = vmulq_n_s32(ab11[i], alpha));
+        loop4!(i, ab12[i] = vmulq_n_s32(ab12[i], alpha));
+        loop4!(i, ab21[i] = vmulq_n_s32(ab21[i], alpha));
+        loop4!(i, ab22[i] = vmulq_n_s32(ab22[i], alpha));
+    }
 
     // load one int32x4_t from four pointers
     macro_rules! loadq_from_pointers {
