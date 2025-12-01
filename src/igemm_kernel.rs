@@ -137,6 +137,20 @@ impl GemmKernel for KernelNeon {
     #[inline(always)]
     fn mc() -> usize { archparam::S_MC }
 
+    #[inline]
+    unsafe fn pack_mr(kc: usize, mc: usize, pack: &mut [Self::Elem],
+                      a: *const Self::Elem, rsa: isize, csa: isize)
+    {
+        crate::packing::pack_neon::<Self::MRTy, T>(kc, mc, pack, a, rsa, csa)
+    }
+
+    #[inline]
+    unsafe fn pack_nr(kc: usize, mc: usize, pack: &mut [Self::Elem],
+                      a: *const Self::Elem, rsa: isize, csa: isize)
+    {
+        crate::packing::pack_neon::<Self::NRTy, T>(kc, mc, pack, a, rsa, csa)
+    }
+
     #[inline(always)]
     unsafe fn kernel(
         k: usize,
