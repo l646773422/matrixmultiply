@@ -219,19 +219,25 @@ unsafe fn kernel_target_avx2(k: usize, alpha: T, a: *const T, b: *const T,
     //    Multiply broadcasted a[i] with b vector
     //    Accumulate into ab[i]
     unroll_by!(4 => k, {
-        let bv = _mm256_loadu_si256(b as *const _);
+        let av = _mm256_loadu_si256(a as *const _);
+        if _mm256_testz_si256(av, av) == 1 {
+            a = a.add(MR);
+            b = b.add(NR);
+        } else {
+            let bv = _mm256_loadu_si256(b as *const _);
 
-        ab[0] = _mm256_add_epi32(ab[0], _mm256_mullo_epi32(_mm256_set1_epi32(at(a, 0)), bv));
-        ab[1] = _mm256_add_epi32(ab[1], _mm256_mullo_epi32(_mm256_set1_epi32(at(a, 1)), bv));
-        ab[2] = _mm256_add_epi32(ab[2], _mm256_mullo_epi32(_mm256_set1_epi32(at(a, 2)), bv));
-        ab[3] = _mm256_add_epi32(ab[3], _mm256_mullo_epi32(_mm256_set1_epi32(at(a, 3)), bv));
-        ab[4] = _mm256_add_epi32(ab[4], _mm256_mullo_epi32(_mm256_set1_epi32(at(a, 4)), bv));
-        ab[5] = _mm256_add_epi32(ab[5], _mm256_mullo_epi32(_mm256_set1_epi32(at(a, 5)), bv));
-        ab[6] = _mm256_add_epi32(ab[6], _mm256_mullo_epi32(_mm256_set1_epi32(at(a, 6)), bv));
-        ab[7] = _mm256_add_epi32(ab[7], _mm256_mullo_epi32(_mm256_set1_epi32(at(a, 7)), bv));
+            ab[0] = _mm256_add_epi32(ab[0], _mm256_mullo_epi32(_mm256_set1_epi32(at(a, 0)), bv));
+            ab[1] = _mm256_add_epi32(ab[1], _mm256_mullo_epi32(_mm256_set1_epi32(at(a, 1)), bv));
+            ab[2] = _mm256_add_epi32(ab[2], _mm256_mullo_epi32(_mm256_set1_epi32(at(a, 2)), bv));
+            ab[3] = _mm256_add_epi32(ab[3], _mm256_mullo_epi32(_mm256_set1_epi32(at(a, 3)), bv));
+            ab[4] = _mm256_add_epi32(ab[4], _mm256_mullo_epi32(_mm256_set1_epi32(at(a, 4)), bv));
+            ab[5] = _mm256_add_epi32(ab[5], _mm256_mullo_epi32(_mm256_set1_epi32(at(a, 5)), bv));
+            ab[6] = _mm256_add_epi32(ab[6], _mm256_mullo_epi32(_mm256_set1_epi32(at(a, 6)), bv));
+            ab[7] = _mm256_add_epi32(ab[7], _mm256_mullo_epi32(_mm256_set1_epi32(at(a, 7)), bv));
 
-        a = a.add(MR);
-        b = b.add(NR);
+            a = a.add(MR);
+            b = b.add(NR);
+        }
     });
 
     macro_rules! c {
@@ -309,15 +315,21 @@ unsafe fn kernel_target_sse41(k: usize, alpha: T, a: *const T, b: *const T,
     //    Multiply broadcasted a[i] with b vector
     //    Accumulate into ab[i]
     unroll_by!(4 => k, {
-        let bv = _mm_loadu_si128(b as *const _);
-        
-        ab[0] = _mm_add_epi32(ab[0], _mm_mullo_epi32(_mm_set1_epi32(at(a, 0)), bv));
-        ab[1] = _mm_add_epi32(ab[1], _mm_mullo_epi32(_mm_set1_epi32(at(a, 1)), bv));
-        ab[2] = _mm_add_epi32(ab[2], _mm_mullo_epi32(_mm_set1_epi32(at(a, 2)), bv));
-        ab[3] = _mm_add_epi32(ab[3], _mm_mullo_epi32(_mm_set1_epi32(at(a, 3)), bv));
+        let av = _mm_loadu_si128(a as *const _);
+        if _mm_testz_si128(av, av) == 1 {
+            a = a.add(MR);
+            b = b.add(NR);
+        } else {
+            let bv = _mm_loadu_si128(b as *const _);
 
-        a = a.add(MR);
-        b = b.add(NR);
+            ab[0] = _mm_add_epi32(ab[0], _mm_mullo_epi32(_mm_set1_epi32(at(a, 0)), bv));
+            ab[1] = _mm_add_epi32(ab[1], _mm_mullo_epi32(_mm_set1_epi32(at(a, 1)), bv));
+            ab[2] = _mm_add_epi32(ab[2], _mm_mullo_epi32(_mm_set1_epi32(at(a, 2)), bv));
+            ab[3] = _mm_add_epi32(ab[3], _mm_mullo_epi32(_mm_set1_epi32(at(a, 3)), bv));
+
+            a = a.add(MR);
+            b = b.add(NR);
+        }
     });
 
     let alphav = _mm_set1_epi32(alpha);
@@ -397,25 +409,38 @@ unsafe fn kernel_target_neon(k: usize, alpha: T, a: *const T, b: *const T,
 
     for _ in 0..k {
         let a1 = vld1q_s32(a);
-        let b1 = vld1q_s32(b);
         let a2 = vld1q_s32(a.add(4));
-        let b2 = vld1q_s32(b.add(4));
 
-        // compute an outer product ab = a (*) b in four quadrants ab11, ab12, ab21, ab22
+        let a1_zero = vmaxvq_u32(vreinterpretq_u32_s32(a1)) == 0;
+        let a2_zero = vmaxvq_u32(vreinterpretq_u32_s32(a2)) == 0;
 
-        // ab11: [a1 a2 a3 a4] (*) [b1 b2 b3 b4]
-        // ab11: a1b1 a1b2 a1b3 a1b4
-        //       a2b1 a2b2 a2b3 a2b4
-        //       a3b1 a3b2 a3b3 a3b4
-        //       a4b1 a4b2 a4b3 a4b4
-        //  etc
-        ab_ij_equals_ai_bj!(ab11, a1, b1);
-        ab_ij_equals_ai_bj!(ab12, a1, b2);
-        ab_ij_equals_ai_bj!(ab21, a2, b1);
-        ab_ij_equals_ai_bj!(ab22, a2, b2);
+        if a1_zero && a2_zero {
+            a = a.add(MR);
+            b = b.add(NR);
+        } else {
+            let b1 = vld1q_s32(b);
+            let b2 = vld1q_s32(b.add(4));
 
-        a = a.add(MR);
-        b = b.add(NR);
+            // compute an outer product ab = a (*) b in four quadrants ab11, ab12, ab21, ab22
+            
+            // ab11: [a1 a2 a3 a4] (*) [b1 b2 b3 b4]
+            // ab11: a1b1 a1b2 a1b3 a1b4
+            //       a2b1 a2b2 a2b3 a2b4
+            //       a3b1 a3b2 a3b3 a3b4
+            //       a4b1 a4b2 a4b3 a4b4
+            //  etc
+            if !a1_zero {
+                ab_ij_equals_ai_bj!(ab11, a1, b1);
+                ab_ij_equals_ai_bj!(ab12, a1, b2);
+            }
+            if !a2_zero {
+                ab_ij_equals_ai_bj!(ab21, a2, b1);
+                ab_ij_equals_ai_bj!(ab22, a2, b2);
+            }
+
+            a = a.add(MR);
+            b = b.add(NR);
+        }
     }
 
     macro_rules! c {
@@ -515,7 +540,12 @@ unsafe fn kernel_fallback_impl(k: usize, alpha: T, a: *const T, b: *const T,
 
     // Compute A B into ab[i][j]
     unroll_by!(4 => k, {
-        loop8!(i, loop4!(j, ab[i][j] += at(a, i) * at(b, j)));
+        loop8!(i, {
+            let ai = at(a, i);
+            if ai != 0 {
+                loop4!(j, ab[i][j] += ai * at(b, j));
+            }
+        });
 
         a = a.offset(MR as isize);
         b = b.offset(NR as isize);

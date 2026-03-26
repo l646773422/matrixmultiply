@@ -13,6 +13,7 @@ import time
 _POST_COMPILE_SLEEP = 0.5
 
 _GEMMTYPE = {
+    'i32': 'IGEMM',
     'f32': 'SGEMM',
     'f64': 'DGEMM',
     'c32': 'CGEMM',
@@ -71,7 +72,7 @@ def bench_iteration(sizes, ty, nc, kc, mc, *, threads, file, sleep):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--type", "-t", type=str, default=["f64"], choices=["f64", "f32", "c64", "c32"], nargs="+")
+    parser.add_argument("--type", "-t", type=str, default=["i32"], choices=["i32", "f64", "f32", "c64", "c32"], nargs="+")
     parser.add_argument("--size", "-s", type=str, nargs="+", required=True,
                         help="Sizes or size ranges like 16 or 16:64:8")
     parser.add_argument("--nc", type=str, nargs="+", help="Sizes or size ranges like 16 or 16:64:8")
